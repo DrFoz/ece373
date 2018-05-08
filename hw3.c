@@ -36,11 +36,35 @@ static struct mydev_dev {
 
 static dev_t mydev_node;
 
-static struct pci_driver intel_eth_driver = {
+static char *intel_driver_name = "Intel 82540EM";
+
+static const struct pci_device_id intel_pci_tbl[] = {
+    { PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_82540EM), 0, 0, 0 },
+    /* more device ids can be listed here */
+
+    /* required last entry */
+    {0, }
+};
+MODULE_DEVICE_TABLE(pci, intel_pci_tbl);
+MODULE_LICENSE("GPL");
+
+static int new_leds;
+module_param(new_leds, int, 0);
+
+struct intel 
+{
+    struct pci_dev *pdev;
+    void *hw_addr;
+};
+
+
+static struct pci_driver intel_driver = 
+{
 	.name	= "pci_intel_eth",
-	.id_table = intel_eth_pci_tbl,
-	.probe	=intel_eth_probe,
-	.remove	= intel_eth_remove
+	.id_table = intel_pci_tbl,
+	.probe	=intel_probe,
+	.remove	= intel_remove
+}
 
 static int homework3_open(struct inode *inode, struct file *file){
 
@@ -100,6 +124,21 @@ out:
                 return ret;
 }
 
+static void intel_remove(struct pci_dev *pdev)
+{
+    struct pes *pe = pci_get_drvdata(pdev);
+
+    /* unmap device from memory */
+    iounmap(pe->hw_addr);
+
+    /* free any allocated memory */
+    kfree(pe);
+
+    pci_release_selected_regions(pdev,
+                     pci_select_bars(pdev, IORESOURCE_MEM));
+    pci_disable_device(pdev);
+}
+
 static struct file_operations mydev_fops =
  {
                 .owner = THIS_MODULE,
@@ -112,15 +151,25 @@ static struct file_operations mydev_fops =
 static int __init homework3_init(void)
 {
         int ret;
-	majorNumber = register_chrdev(0, DEVNAME, &mydev_fops);
-
+        int fd;
+	    majorNumber = register_chrdev(0, DEVNAME, &mydev_fops);
         printk(KERN_INFO "homework3 module loading...\n");
-        mydev.syscall_val = 25;
+
         ret = alloc_chrdev_region(&mydev_node, 0, DEVCNT, DEVNAME);
         if(ret)
-	{
+	   {
                 printk(KERN_ERR "alloc_chrdev_region() failed! ret=%d\n", ret);
                 goto chrdev_err;
+        }
+
+        fd = pci_register_driver(&intel_driver);
+
+        if(fd)
+        {
+                printk(KERN_ERR "pci register fail ret=%d\n", fd);
+                goto pcireg_err;
+
+
         }
 
         printk(KERN_INFO "Allocated %d devices at major %d\n", DEVCNT, MAJOR(mydev_node));
@@ -142,6 +191,9 @@ cdev_err:
 
 chrdev_err:
 	return ret;
+
+pcireg_err:
+    return fd;
 }
 
 static void __exit homework3_exit(void){
@@ -151,7 +203,8 @@ static void __exit homework3_exit(void){
 
         /*clean up device*/
         unregister_chrdev_region(mydev_node, DEVCNT);
-
+        pci_unregister_driver(&intel_driver);
+        printk(KERN_INFO "%s unloaded\n", intel_driver.name);
         printk(KERN_INFO "homework3 module unloaded!\n");
 }
 
